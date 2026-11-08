@@ -238,6 +238,21 @@ jobs:
                   sys.exit('RamDiskDxe component line not found')
               dsc.write_text(text.replace(old, new))
               print('DSC: LZMA linked into RamDiskDxe')
+
+          dsc = pathlib.Path('uefi-sheng/Platforms/Xiaomi/shengPkg/sheng.dsc')
+          text = dsc.read_text()
+          if 'ExtractGuidedSectionLib|' not in text:
+              text = text.replace(
+                  '[LibraryClasses]\n',
+                  '[LibraryClasses]\n'
+                  '  ExtractGuidedSectionLib|MdePkg/Library/DxeExtractGuidedSectionLib/DxeExtractGuidedSectionLib.inf\n',
+                  1)
+          if 'LzmaCustomDecompressLib' not in text:
+              if old not in text:
+                  sys.exit('sheng.dsc RamDiskDxe component line not found')
+              text = text.replace(old, new)
+          dsc.write_text(text)
+          print('DSC: sheng.dsc updated')
           PY
           python3 - <<'PY'
           import pathlib, sys
