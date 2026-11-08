@@ -43,6 +43,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          path: tool
+      - uses: actions/checkout@v4
+        with:
           repository: UniXNU/UniXNU-sheng
           ref: ${{ inputs.device_ref }}
           path: device
@@ -187,6 +190,21 @@ jobs:
           PY
           rm -rf /tmp/lf
 
+      - name: patch ramdisk fallback and header version
+        run: |
+          set -euo pipefail
+          cp tool/patches/UniXNURamDiskDxe.c \
+             UniXNU/package/UniXNUPkg/Driver/UniXNURamDiskDxe/UniXNURamDiskDxe.c
+          echo "ramdisk driver replaced"
+          python3 - <<'PY'
+          import pathlib, sys
+          p = pathlib.Path('uefi-sheng/Resources/Configs/sheng.toml')
+          text = p.read_text()
+          if 'header_version = 0' not in text:
+              sys.exit('header_version line not found')
+          p.write_text(text.replace('header_version = 0', 'header_version = 4'))
+          print('sheng.toml header_version -> 4')
+          PY
       - name: strip wifi from the board
         if: ${{ !inputs.wifi }}
         run: |
