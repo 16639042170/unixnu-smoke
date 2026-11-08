@@ -50,8 +50,10 @@ class SparseReader:
             ctype, _res, size, total = struct.unpack("<HHII", raw)
             if index < 5:
                 print(f"  chunk[{index}] type={ctype:#x} size={size} total={total} pos={pos}", flush=True)
-            self.chunks.append((out, out + size, ctype, pos + chdr_sz))
-            out += size
+            # this packer stores the chunk size in blocks, not bytes
+            size_bytes = size * blk_sz
+            self.chunks.append((out, out + size_bytes, ctype, pos + chdr_sz))
+            out += size_bytes
             pos += total
         print(f"  chunk bytes={out} expected={self.size} file={self.f.seek(0,2)}", flush=True)
         if out != self.size:
