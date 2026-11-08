@@ -218,8 +218,15 @@ jobs:
               inf.write_text(text)
               print('INF: MemoryAllocationLib added')
 
-          dsc = pathlib.Path('uefi-sheng/Platforms/Xiaomi/shengPkg/sheng.dsc')
+          dsc = pathlib.Path('UniXNU/package/UniXNUPkg/UniXNUPkg.dsc')
           text = dsc.read_text()
+          if 'ExtractGuidedSectionLib|' not in text:
+              text = text.replace(
+                  '[LibraryClasses]\n',
+                  '[LibraryClasses]\n'
+                  '  ExtractGuidedSectionLib|MdePkg/Library/DxeExtractGuidedSectionLib/DxeExtractGuidedSectionLib.inf\n',
+                  1)
+              print('DSC: ExtractGuidedSectionLib mapped')
           old = '  UniXNUPkg/Driver/UniXNURamDiskDxe/UniXNURamDiskDxe.inf\n'
           new = ('  UniXNUPkg/Driver/UniXNURamDiskDxe/UniXNURamDiskDxe.inf {\n'
                  '    <LibraryClasses>\n'
