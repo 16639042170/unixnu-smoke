@@ -44,12 +44,16 @@ class SparseReader:
         self.chunks = []
         pos = fhdr_sz
         out = 0
-        for _ in range(total_chunks):
+        for index in range(total_chunks):
             self.f.seek(pos)
-            ctype, _res, size, total = struct.unpack("<HHII", self.f.read(12))
+            raw = self.f.read(12)
+            ctype, _res, size, total = struct.unpack("<HHII", raw)
+            if index < 5:
+                print(f"  chunk[{index}] type={ctype:#x} size={size} total={total} pos={pos}", flush=True)
             self.chunks.append((out, out + size, ctype, pos + chdr_sz))
             out += size
             pos += total
+        print(f"  chunk bytes={out} expected={self.size} file={self.f.seek(0,2)}", flush=True)
         if out != self.size:
             raise SystemExit(f"sparse size mismatch: {out} != {self.size}")
 
