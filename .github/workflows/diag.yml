@@ -1,0 +1,57 @@
+name: diag
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 965460a9ac1715636c769634fd0d69f58b2bd0f9
+          path: device
+      - name: fetch the official fastboot archive
+        working-directory: device
+        run: |
+          set -euo pipefail
+          python3 scripts/download-sheng-firmware.py --connections 32
+          ls -la .cache/firmware/sheng/
+      - name: list archive members
+        working-directory: device
+        run: |
+          set -euo pipefail
+          ARCHIVE=$(ls .cache/firmware/sheng/*.tgz | head -1)
+          echo "archive=$ARCHIVE"
+          tar -tzf "$ARCHIVE" > /tmp/members.txt
+          wc -l /tmp/members.txt
+          echo '--- image members ---'
+          grep -E '\.img$' /tmp/members.txt | head -40
+          echo '--- vendor/super ---'
+          grep -E 'vendor|super|wcn|firmware' /tmp/members.txt | head -40
+      - name: extract vendor image and locate the firmware
+        working-directory: device
+        run: |
+          set -euo pipefail
+          ARCHIVE=$(ls .cache/firmware/sheng/*.tgz | head -1)
+          mkdir -p /tmp/rom
+          VENDOR_PATH=$(grep -E '(^|/)vendor\.img$' /tmp/members.txt | head -1 || true)
+          echo "vendor member: ${VENDOR_PATH:-<none>}"
+          if [ -z "$VENDOR_PATH" ]; then
+            echo "no vendor.img in the archive; members above"
+            exit 0
+          fi
+          tar -xzf "$ARCHIVE" -C /tmp/rom "$VENDOR_PATH"
+          ls -la /tmp/rom/$(dirname "$VENDOR_PATH")
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq erofs-utils
+          fsck.erofs --extract=/tmp/vendor "/tmp/rom/$VENDOR_PATH" || true
+          echo '--- candidate firmware files ---'
+          find /tmp/vendor -type f \( -iname 'amss.bin' -o -iname 'm3.bin' -o -iname 'board-2.bin' \) -print0 2>/dev/null \
+            | xargs -0 -r sha256sum || true
+          echo '--- tree under ath12k ---'
+          find /tmp/vendor -type d -iname '*ath12k*' 2>/dev/null | head -20
