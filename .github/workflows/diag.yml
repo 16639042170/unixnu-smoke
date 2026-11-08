@@ -25,32 +25,32 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/download-sheng-firmware.py --connections 32
-          ls -la .cache/firmware/sheng/
 
-      - name: unpack super.img
+      - name: list every archive member
+        run: |
+          set -euo pipefail
+          ARCHIVE=$(ls device/.cache/firmware/sheng/*.tgz | head -1)
+          tar -tzf "$ARCHIVE" | sed -n '1,120p'
+
+      - name: unpack vendor and inspect the firmware layout
         run: |
           set -euo pipefail
           ARCHIVE=$(ls device/.cache/firmware/sheng/*.tgz | head -1)
           SUPER=$(tar -tzf "$ARCHIVE" | grep -E '/super\.img$' | head -1)
-          echo "super member: $SUPER"
           mkdir -p /tmp/rom
           tar -xzf "$ARCHIVE" -C /tmp/rom "$SUPER"
-          ls -la "/tmp/rom/$SUPER"
-          python3 tool/tools/super_unpack.py "/tmp/rom/$SUPER" --list
-
-      - name: extract vendor and locate the firmware
-        run: |
-          set -euo pipefail
-          ARCHIVE=$(ls device/.cache/firmware/sheng/*.tgz | head -1)
-          SUPER=$(tar -tzf "$ARCHIVE" | grep -E '/super\.img$' | head -1)
           python3 tool/tools/super_unpack.py "/tmp/rom/$SUPER" --extract vendor --out /tmp/vendor.img
           sudo apt-get update -qq
           sudo apt-get install -y -qq erofs-utils
           rm -rf /tmp/vendorout
           fsck.erofs --extract=/tmp/vendorout /tmp/vendor.img || true
-          echo '--- candidates ---'
-          find /tmp/vendorout -type f \( -iname 'amss.bin' -o -iname 'm3.bin' -o -iname 'board-2.bin' \) -print0 2>/dev/null | xargs -0 -r sha256sum || true
-          echo '--- ath12k dirs ---'
-          find /tmp/vendorout -type d -iname '*ath12k*' 2>/dev/null | head -20
-          echo '--- bt firmware ---'
-          find /tmp/vendorout -type d -iname '*bt*' 2>/dev/null | head -10
+          echo '--- top level ---'
+          ls /tmp/vendorout | head -30
+          echo '--- vendor/firmware ---'
+          ls -la /tmp/vendorout/vendor/firmware 2>/dev/null | head -40
+          echo '--- any wcn/amss/ath12k ---'
+          find /tmp/vendorout \( -iname '*wcn*' -o -iname 'amss*' -o -iname '*ath12k*' -o -iname 'board-2.bin' \) 2>/dev/null | head -40
+          echo '--- bt_firmware ---'
+          ls -la /tmp/vendorout/vendor/bt_firmware 2>/dev/null | head -20
+          echo '--- size of firmware dirs ---'
+          du -sh /tmp/vendorout/vendor/firmware /tmp/vendorout/vendor/bt_firmware 2>/dev/null || true
