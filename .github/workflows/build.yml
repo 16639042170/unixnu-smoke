@@ -32,6 +32,10 @@ on:
         description: "Platform seed, 8 hex digits"
         type: string
         default: "42d7a033"
+      firmware_only:
+        description: "Skip the 15 GB userdata image (firmware/boot only)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -269,6 +273,7 @@ jobs:
           scripts/package.sh "${args[@]}"
 
       - name: userdata image
+        if: ${{ !inputs.firmware_only }}
         continue-on-error: true
         working-directory: UniXNU
         env:
