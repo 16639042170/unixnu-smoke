@@ -241,12 +241,10 @@ jobs:
 
           dsc = pathlib.Path('uefi-sheng/Platforms/Xiaomi/shengPkg/sheng.dsc')
           text = dsc.read_text()
-          if 'ExtractGuidedSectionLib|' not in text:
-              text = text.replace(
-                  '[LibraryClasses]\n',
-                  '[LibraryClasses]\n'
-                  '  ExtractGuidedSectionLib|MdePkg/Library/DxeExtractGuidedSectionLib/DxeExtractGuidedSectionLib.inf\n',
-                  1)
+          if '[LibraryClasses.common.DXE_DRIVER]' not in text:
+              text += (
+                  '\n[LibraryClasses.common.DXE_DRIVER]\n'
+                  '  ExtractGuidedSectionLib|MdePkg/Library/DxeExtractGuidedSectionLib/DxeExtractGuidedSectionLib.inf\n')
           if 'LzmaCustomDecompressLib' not in text:
               if old not in text:
                   sys.exit('sheng.dsc RamDiskDxe component line not found')
