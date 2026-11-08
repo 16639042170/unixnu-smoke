@@ -32,30 +32,24 @@ jobs:
           tar -xzf "$ARCHIVE" -C /tmp/rom "$SUPER"
           python3 tool/tools/super_unpack.py "/tmp/rom/$SUPER" --extract vendor --out /tmp/vendor.img
           sudo apt-get update -qq
-          sudo apt-get install -y -qq erofs-utils e2fsprogs
+          sudo apt-get install -y -qq erofs-utils
 
-      - name: inspect and extract the vendor filesystem
+      - name: list the vendor firmware trees
         run: |
           set +e
-          echo '--- file type ---'
-          file -s /tmp/vendor.img
-          xxd -l 32 -s 1024 /tmp/vendor.img
-          echo '--- erofs extract ---'
           rm -rf /tmp/vendorout
-          fsck.erofs --extract=/tmp/vendorout /tmp/vendor.img 2>&1 | tail -10
-          ls /tmp/vendorout 2>&1 | head -10
-          if [ ! -d /tmp/vendorout/vendor/ ]; then
-            echo '--- ext4 via debugfs ---'
-            debugfs -R "rdump / /tmp/vendorout" /tmp/vendor.img 2>&1 | tail -5
-            ls /tmp/vendorout 2>&1 | head -10
-            if [ ! -d /tmp/vendorout/vendor ]; then
-              echo '--- retry ext4 by uuid path ---'
-              debugfs -R "ls -l /" /tmp/vendor.img 2>&1 | head -20
-            fi
-          fi
-          echo '--- firmware dir ---'
-          ls -la /tmp/vendorout/vendor/firmware 2>&1 | head -40
-          echo '--- wcn/amss/ath12k ---'
-          find /tmp/vendorout \( -iname '*wcn*' -o -iname 'amss*' -o -iname '*ath12k*' -o -iname 'board-2.bin' \) 2>/dev/null | head -40
-          echo '--- bt ---'
-          ls -la /tmp/vendorout/vendor/bt_firmware 2>&1 | head -20
+          fsck.erofs --extract=/tmp/vendorout /tmp/vendor.img 2>&1 | tail -3
+          echo '--- vendor root ---'
+          ls /tmp/vendorout | head -40
+          echo '--- firmware ---'
+          ls -la /tmp/vendorout/firmware | head -60
+          echo '--- firmware_mnt ---'
+          ls -la /tmp/vendorout/firmware_mnt 2>&1 | head -20
+          echo '--- bt_firmware ---'
+          ls -la /tmp/vendorout/bt_firmware 2>&1 | head -30
+          echo '--- any amss/board-2/m3 anywhere ---'
+          find /tmp/vendorout -iname 'amss*' -o -iname 'board-2.bin' -o -iname 'm3.bin' 2>/dev/null | head -20
+          echo '--- wlan-ish dirs ---'
+          find /tmp/vendorout -maxdepth 4 -type d \( -iname '*wlan*' -o -iname '*wifi*' -o -iname '*qca*' -o -iname '*ath*' \) 2>/dev/null | head -20
+          echo '--- sizes ---'
+          du -sh /tmp/vendorout/firmware /tmp/vendorout/bt_firmware 2>&1
