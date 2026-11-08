@@ -207,6 +207,29 @@ jobs:
           echo "ramdisk driver replaced"
           python3 - <<'PY'
           import pathlib, sys
+          inf = pathlib.Path('UniXNU/package/UniXNUPkg/Driver/UniXNURamDiskDxe/UniXNURamDiskDxe.inf')
+          text = inf.read_text()
+          if 'MemoryAllocationLib' not in text:
+              text = text.replace('  UefiDriverEntryPoint\n', '  UefiDriverEntryPoint\n  MemoryAllocationLib\n')
+              inf.write_text(text)
+              print('INF: MemoryAllocationLib added')
+
+          dsc = pathlib.Path('uefi-sheng/Platforms/Xiaomi/shengPkg/sheng.dsc')
+          text = dsc.read_text()
+          old = '  UniXNUPkg/Driver/UniXNURamDiskDxe/UniXNURamDiskDxe.inf\n'
+          new = ('  UniXNUPkg/Driver/UniXNURamDiskDxe/UniXNURamDiskDxe.inf {\n'
+                 '    <LibraryClasses>\n'
+                 '      NULL|MdeModulePkg/Library/LzmaCustomDecompressLib/LzmaCustomDecompressLib.inf\n'
+                 '      ExtractGuidedSectionLib|MdePkg/Library/DxeExtractGuidedSectionLib/DxeExtractGuidedSectionLib.inf\n'
+                 '  }\n')
+          if 'LzmaCustomDecompressLib' not in text:
+              if old not in text:
+                  sys.exit('RamDiskDxe component line not found')
+              dsc.write_text(text.replace(old, new))
+              print('DSC: LZMA linked into RamDiskDxe')
+          PY
+          python3 - <<'PY'
+          import pathlib, sys
           p = pathlib.Path('uefi-sheng/Resources/Configs/sheng.toml')
           text = p.read_text()
           if 'header_version = 0' not in text:
