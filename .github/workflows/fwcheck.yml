@@ -1,0 +1,23 @@
+name: fwcheck
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fw:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: fetch WCN7850 firmware from linux-firmware
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git lf
+          cd lf
+          git sparse-checkout set ath12k/WCN7850
+          ls -la ath12k/WCN7850/hw2.0/
+          sha256sum ath12k/WCN7850/hw2.0/amss.bin ath12k/WCN7850/hw2.0/m3.bin ath12k/WCN7850/hw2.0/board-2.bin
+          stat -c '%n %s' ath12k/WCN7850/hw2.0/amss.bin ath12k/WCN7850/hw2.0/m3.bin ath12k/WCN7850/hw2.0/board-2.bin
