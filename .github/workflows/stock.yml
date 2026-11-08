@@ -1,0 +1,27 @@
+name: stock-vendor-boot
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: UniXNU/UniXNU-sheng
+          ref: 689400177f93219a38bd7cf5ae2e9f5782adc594
+      - name: download and extract stock images
+        run: |
+          set -euo pipefail
+          python3 scripts/download-sheng-firmware.py --connections 32
+          ARCHIVE=$(ls .cache/firmware/sheng/*.tgz | head -1)
+          mkdir -p out
+          tar -xzf "$ARCHIVE" -C out --wildcards '*/images/vendor_boot.img' '*/images/dtbo.img' '*/images/boot.img'
+          find out -type f -printf '%p %s\n'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stock-vendor-boot
+          path: out
+          retention-days: 3
