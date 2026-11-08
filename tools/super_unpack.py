@@ -116,15 +116,15 @@ def parse_metadata(reader):
         exts = struct.unpack("<III", hdr[92:104])
         print(f"header at {base}: v{major}.{minor} header={header_size} tables={tables_size}", flush=True)
         print(f"  descriptors partitions={parts} extents={exts}", flush=True)
-        return base, hdr, parts, exts
+        return base, header_size, hdr, parts, exts
     raise SystemExit("no valid metadata header")
 
 
-def read_tables(reader, base, parts, exts):
+def read_tables(reader, table_base, parts, exts):
     p_off, p_num, p_size = parts
     e_off, e_num, e_size = exts
-    pdata = reader.read_at(base + p_off, p_num * p_size)
-    edata = reader.read_at(base + e_off, e_num * e_size)
+    pdata = reader.read_at(table_base + p_off, p_num * p_size)
+    edata = reader.read_at(table_base + e_off, e_num * e_size)
     plist = []
     for i in range(p_num):
         ent = pdata[i * p_size:(i + 1) * p_size]
@@ -155,8 +155,9 @@ def main():
 
     reader = open_reader(args.super_img)
     print(f"image size: {reader.size} bytes", flush=True)
-    base, hdr, parts, exts = parse_metadata(reader)
-    plist, elist = read_tables(reader, base, parts, exts)
+    base, header_size, hdr, parts, exts = parse_metadata(reader)
+    table_base = base + header_size
+    plist, elist = read_tables(reader, table_base, parts, exts)
     print(f"partitions={len(plist)} extents={len(elist)}", flush=True)
     for name, first_ext, num_ext in plist:
         if first_ext + num_ext > len(elist):
