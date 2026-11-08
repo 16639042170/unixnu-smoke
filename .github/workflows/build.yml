@@ -144,6 +144,9 @@ jobs:
           print('patched', p)
           PY
 
+      - name: ath12k source fetch
+        working-directory: device/drivers/Ath12kWifi
+        run: bash -x tools/fetch-sources.sh
       - name: patch reference kernel stubs
         run: |
           python3 - <<'PY'
