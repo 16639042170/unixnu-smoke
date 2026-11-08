@@ -1,0 +1,262 @@
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      device_ref:
+        description: "UniXNU-sheng revision"
+        type: string
+        default: "689400177f93219a38bd7cf5ae2e9f5782adc594"
+      unixnu_ref:
+        description: "UniXNU revision"
+        type: string
+        default: "5dc00d201496a1e7a72d1f5db23f041eb94ace1c"
+      soc_ref:
+        description: "SM8550 SoC revision (feeds.toml)"
+        type: string
+        default: "97665e28578483082b674e8375a8fa65f4cf49cf"
+      os:
+        description: "OS profile"
+        type: choice
+        options: ["27", "26", "17"]
+        default: "27"
+      init_data:
+        description: "Create a NEW installation seed (first install)"
+        type: boolean
+        default: true
+      wifi:
+        description: "Extract the WCN7850 firmware from the official archive and enable Wi-Fi"
+        type: boolean
+        default: true
+      unique_chip_id:
+        description: "Platform seed, 8 hex digits"
+        type: string
+        default: "42d7a033"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: macos-26
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: UniXNU/UniXNU-sheng
+          ref: ${{ inputs.device_ref }}
+          path: device
+          submodules: recursive
+
+      - uses: actions/checkout@v4
+        with:
+          repository: UniXNU/UniXNU
+          ref: ${{ inputs.unixnu_ref }}
+          path: UniXNU
+          submodules: recursive
+
+      - uses: actions/checkout@v4
+        with:
+          repository: UniXNU/uefi-sheng
+          path: uefi-sheng
+          submodules: recursive
+
+      - name: tools
+        run: |
+          brew install dtc llvm lld cmake mtools ninja glslang shaderc spirv-tools bison pkgconf erofs-utils blacktop/tap/ipsw
+          {
+            echo "/opt/homebrew/opt/llvm/bin"
+            echo "/opt/homebrew/opt/lld/bin"
+            echo "/opt/homebrew/opt/bison/bin"
+          } >> "$GITHUB_PATH"
+          ok=1
+          for t in clang make git ninja cmake dtc fdtget fdtput aea compression_tool mformat mcopy ipsw; do
+            command -v "$t" >/dev/null || { echo "missing tool: $t"; ok=0; }
+          done
+          [ "$ok" = 1 ]
+
+      - name: platform seed
+        env:
+          seed: ${{ inputs.unique_chip_id }}
+        run: |
+          if ! [[ "$seed" =~ ^[0-9a-fA-F]{8}$ ]]; then
+            echo 'unique_chip_id must be 8 hex digits' >&2
+            exit 1
+          fi
+
+      - name: pin the SoC revision
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re
+          p = pathlib.Path('device/feeds.toml')
+          t = p.read_text()
+          t2 = re.sub(r'(name = "sm8550"[\s\S]{0,200}?commit = ")[0-9a-f]{40}"',
+                      r'\g<1>' + os.environ['SOC_REF'] + '"', t, count=1)
+          if t2 == t:
+              print('warning: sm8550 pin not replaced')
+          p.write_text(t2)
+          print('soc pin ->', os.environ['SOC_REF'])
+          PY
+        env:
+          SOC_REF: ${{ inputs.soc_ref }}
+
+      - name: fix new-file patch metadata
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          fixed = 0
+          for root in ('UniXNU', 'device'):
+              for p in pathlib.Path(root).rglob('*.patch'):
+                  text = p.read_text(encoding='utf-8', errors='surrogateescape')
+                  out, changed = [], False
+                  for line in text.splitlines(keepends=True):
+                      if line.startswith('--- /dev/null') and out and out[-1].startswith('diff --git '):
+                          out.append('new file mode 100644\n')
+                          changed = True
+                      out.append(line)
+                  if changed:
+                      p.write_text(''.join(out), encoding='utf-8', errors='surrogateescape')
+                      fixed += 1
+          print('patched', fixed, 'patch files')
+          PY
+
+      - name: patch ath12k source fetch
+        run: |
+          python3 - <<'PY'
+          import pathlib, sys
+          p = pathlib.Path('device/drivers/Ath12kWifi/tools/fetch-sources.py')
+          if not p.is_file():
+              print('ath12k fetch script absent, skipping')
+              sys.exit(0)
+          text = p.read_text()
+          old = '"sparse-checkout", "add", *source["paths"]], check=True)'
+          new = '"sparse-checkout", "set", "--no-cone", "--skip-checks", *source["paths"]], check=True)'
+          if old not in text:
+              print('ath12k patch target absent, skipping')
+              sys.exit(0)
+          p.write_text(text.replace(old, new))
+          print('patched', p)
+          PY
+
+      - name: patch reference kernel stubs
+        run: |
+          python3 - <<'PY'
+          import pathlib, sys
+          p = pathlib.Path('UniXNU/scripts/build-fileset-release-reference.py')
+          if not p.is_file():
+              print('reference script absent, skipping')
+              sys.exit(0)
+          text = p.read_text()
+          old = 'boot_log_rounds))"'
+          new = 'boot_log_rounds|boot_cache_input_capture))"'
+          if old not in text:
+              print('reference stub target absent, skipping')
+              sys.exit(0)
+          p.write_text(text.replace(old, new))
+          print('patched', p)
+          PY
+
+      - name: wcn7850 firmware from linux-firmware
+        if: inputs.wifi
+        working-directory: device
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git /tmp/lf
+          git -C /tmp/lf sparse-checkout set ath12k/WCN7850
+          python3 - /tmp/lf/ath12k/WCN7850/hw2.0 <<'PY'
+          import hashlib, json, pathlib, shutil, sys
+          src = pathlib.Path(sys.argv[1])
+          manifest = json.loads(pathlib.Path('firmware/wcn7850/manifest.json').read_text())['files']
+          for name, meta in manifest.items():
+              data = (src / name).read_bytes()
+              got = hashlib.sha256(data).hexdigest()
+              if len(data) != meta['bytes'] or got != meta['sha256']:
+                  raise SystemExit(f'{name}: hash mismatch (got {got}, want {meta["sha256"]})')
+              shutil.copyfile(src / name, pathlib.Path('firmware/wcn7850') / name)
+              print(f'{name}: {len(data)} bytes verified')
+          PY
+          rm -rf /tmp/lf
+
+      - name: strip wifi from the board
+        if: ${{ !inputs.wifi }}
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path('device/board.toml')
+          text = p.read_text()
+          for line in ('wifi_tool = "scripts/build-wifi-userspace.py"',
+                       'wifi_target = "ios27"',
+                       'wifi_launchd_cache = true',
+                       'wifi_bin_prefix = "wifi-bin"'):
+              text = text.replace(line + "\n", "")
+          text = text.replace('"sheng-wifi=5", ', "")
+          p.write_text(text)
+          print('wifi keys stripped')
+          PY
+
+      - name: package
+        working-directory: device
+        env:
+          UNIXNU_UNIQUE_CHIP_ID: ${{ inputs.unique_chip_id }}
+          INIT_DATA: ${{ inputs.init_data }}
+          OS_PROFILE: ${{ inputs.os }}
+        run: |
+          args=(--os "$OS_PROFILE" --uefi ../uefi-sheng)
+          if [ "$OS_PROFILE" = 27 ] && [ "$INIT_DATA" = true ]; then
+            args+=(--init-data)
+          fi
+          scripts/package.sh "${args[@]}"
+
+      - name: userdata image
+        continue-on-error: true
+        working-directory: UniXNU
+        env:
+          UNIXNU_UNIQUE_CHIP_ID: ${{ inputs.unique_chip_id }}
+        run: |
+          python3 ./unixnu build userdata
+
+      - name: userdata artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: userdata-${{ inputs.os }}
+          retention-days: 1
+          if-no-files-found: ignore
+          path: |
+            UniXNU/out/sheng/*/*/userdata/userdata-root.img
+            UniXNU/out/sheng/*/*/userdata/userdata-root.json
+
+      - name: installation seed
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installation-seed-${{ inputs.os }}
+          retention-days: 1
+          if-no-files-found: ignore
+          path: |
+            UniXNU/out/sheng/*/*/runtime/data.dbr
+            UniXNU/out/sheng/*/*/runtime/inputs.json
+
+      - name: images
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: images-${{ inputs.os }}
+          retention-days: 1
+          if-no-files-found: ignore
+          path: |
+            UniXNU/out/sheng/*/*/boot/boot.img
+            UniXNU/out/sheng/*/*/payload/payload.img
+            UniXNU/out/sheng/*/*/kernel/kernel.macho
+            UniXNU/out/sheng/*/*/package.manifest.json
+
+      - name: build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ inputs.os }}
+          retention-days: 3
+          if-no-files-found: ignore
+          path: |
+            UniXNU/out/sheng/*/*/logs/*.log
