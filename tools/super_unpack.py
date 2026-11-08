@@ -110,10 +110,12 @@ def parse_metadata(reader):
         hdr = reader.read_at(base, 256)
         if struct.unpack("<I", hdr[:4])[0] != HEADER_MAGIC:
             continue
-        major, minor, header_size, tables_size = struct.unpack("<HHII", hdr[4:16])
+        major, minor, header_size = struct.unpack("<HHI", hdr[4:12])
+        tables_size = struct.unpack("<I", hdr[44:48])[0]
         parts = struct.unpack("<III", hdr[80:92])
         exts = struct.unpack("<III", hdr[92:104])
         print(f"header at {base}: v{major}.{minor} header={header_size} tables={tables_size}", flush=True)
+        print(f"  descriptors partitions={parts} extents={exts}", flush=True)
         return base, hdr, parts, exts
     raise SystemExit("no valid metadata header")
 
@@ -155,8 +157,11 @@ def main():
     print(f"image size: {reader.size} bytes", flush=True)
     base, hdr, parts, exts = parse_metadata(reader)
     plist, elist = read_tables(reader, base, parts, exts)
-    print(f"partitions: {len(plist)}", flush=True)
+    print(f"partitions={len(plist)} extents={len(elist)}", flush=True)
     for name, first_ext, num_ext in plist:
+        if first_ext + num_ext > len(elist):
+            print(f"  {name:<24} <bad extent range {first_ext}+{num_ext}>", flush=True)
+            continue
         sectors = sum(elist[i][0] for i in range(first_ext, first_ext + num_ext))
         print(f"  {name:<24} {sectors * SECTOR / (1024**2):9.1f} MiB  extents={num_ext}", flush=True)
 
