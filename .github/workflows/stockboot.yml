@@ -1,0 +1,47 @@
+name: stockboot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  grab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: tool
+      - uses: actions/checkout@v4
+        with:
+          repository: UniXNU/UniXNU-sheng
+          ref: 965460a9ac1715636c769634fd0d69f58b2bd0f9
+          path: device
+      - name: fetch the archive and extract boot.img
+        run: |
+          set -euo pipefail
+          cd device
+          python3 scripts/download-sheng-firmware.py --connections 32
+          cd ..
+          ARCHIVE=$(ls device/.cache/firmware/sheng/*.tgz | head -1)
+          BOOT=$(tar -tzf "$ARCHIVE" | grep -E '/images/boot\.img$' | head -1)
+          echo "member: $BOOT"
+          tar -xzf "$ARCHIVE" -C /tmp "$BOOT"
+          stat -c '%n %s' "/tmp/$BOOT"
+          python3 - "/tmp/$BOOT" <<'PY'
+          import struct, sys
+          data = open(sys.argv[1], 'rb').read(1660)
+          print('magic', data[:8])
+          ks, ka, rs, ra, ss, sa, tags, page, hv, osv = struct.unpack('<10I', data[8:48])
+          print(f'kernel={ks} kernel_addr={ka:#x} ramdisk={rs} ramdisk_addr={ra:#x}')
+          print(f'second={ss} tags={tags:#x} page={page} header_version={hv} os={osv:#x}')
+          print('cmdline', data[64:64+200].split(b'\0')[0])
+          PY
+          cp "/tmp/$BOOT" /tmp/stock-boot.img
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stock-boot
+          retention-days: 3
+          path: /tmp/stock-boot.img
