@@ -1,5 +1,16 @@
 /** @file
-  Publish the FAT initrd from a Mu-Silicium FDT handoff as a read-only block device.
+  Publish the payload volume handed over by the bootloader as a read-only
+  block device.  Two transports are supported:
+
+    - the FDT /chosen linux,initrd-start/end range (bootloader handoff)
+    - a UNIXNUPK container found anywhere in RAM (vendor_boot / boot ramdisk)
+
+  A UNIXNUPK container is a 24-byte header followed by an LZMA-alone stream:
+
+      "UNIXNUPK" | u32 uncompressed | u32 compressed | u32 crc32 | u32 rsvd
+
+  LZMA decompression is provided by MdeModulePkg/LzmaCustomDecompressLib,
+  which the platform DSC links into this module as a NULL library.
 
   SPDX-License-Identifier: BSD-2-Clause
 **/
@@ -15,6 +26,28 @@
 #include <Protocol/BlockIo.h>
 #include <Protocol/DevicePath.h>
 
+//
+// LzmaCustomDecompressLib exports these two symbols but has no public header
+// in this EDK2 tree; declare them locally.  Both return RETURN_STATUS.
+//
+RETURN_STATUS
+EFIAPI
+LzmaUefiDecompressGetInfo (
+  IN  CONST VOID  *Source,
+  IN  UINT32      SourceSize,
+  OUT UINT32      *DestinationSize,
+  OUT UINT32      *ScratchSize
+  );
+
+RETURN_STATUS
+EFIAPI
+LzmaUefiDecompress (
+  IN CONST VOID  *Source,
+  IN UINTN       SourceSize,
+  IN OUT VOID    *Destination,
+  IN OUT VOID    *Scratch
+  );
+
 // Mu-Silicium SEC stores the incoming x0 value in this HOB as a UINT64.
 STATIC CONST EFI_GUID mEntryArgHobGuid = {
   0xDAEE82E6, 0x8090, 0x4E72, { 0xBF, 0xB9, 0x78, 0xC1, 0x3C, 0xD4, 0xE3, 0x59 }
@@ -22,6 +55,19 @@ STATIC CONST EFI_GUID mEntryArgHobGuid = {
 
 // Volume label of the payload FAT image (`[payload] volume` in board.toml).
 STATIC CONST CHAR8  mPayloadLabel[] = { 'S', 'H', 'E', 'N', 'G', 'E', 'S', 'P' };
+
+// "UNIXNUPK" as a little-endian UINT64.
+#define UNIXNUPK_MAGIC  0x4B50554E58494E55ULL
+
+#pragma pack(1)
+typedef struct {
+  CHAR8     Magic[8];
+  UINT32    UncompressedSize;
+  UINT32    CompressedSize;
+  UINT32    Crc32;
+  UINT32    Reserved;
+} UNIXNUPK_HEADER;
+#pragma pack()
 
 STATIC
 UINT64
@@ -162,9 +208,108 @@ PublishRange (
                   &mBlockIo,
                   NULL
                   );
-  DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: initrd block device 0x%lx size 0x%lx %r\n", Start, End - Start, Status));
+  DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: block device 0x%lx size 0x%lx %r\n", Start, End - Start, Status));
   return !EFI_ERROR (Status);
 }
+
+//
+// Decompress a UNIXNUPK container and publish the result as the payload FAT.
+//
+STATIC
+BOOLEAN
+PublishPack (
+  IN CONST UINT8  *Base,
+  IN UINT64        Available
+  )
+{
+  CONST UNIXNUPK_HEADER  *Header;
+  RETURN_STATUS          Status;
+  UINT32                 DestinationSize;
+  UINT32                 ScratchSize;
+  EFI_PHYSICAL_ADDRESS   Destination;
+  VOID                   *Scratch;
+  UINTN                  Pages;
+  UINTN                  PaddedSize;
+
+  if (Available < sizeof (UNIXNUPK_HEADER)) {
+    return FALSE;
+  }
+
+  Header = (CONST UNIXNUPK_HEADER *)(UINTN)Base;
+  if (ReadUnaligned64 ((CONST UINT64 *)(UINTN)Header->Magic) != UNIXNUPK_MAGIC) {
+    return FALSE;
+  }
+
+  if ((Header->CompressedSize < 13) || (Header->CompressedSize > 0x20000000) ||
+      (Header->UncompressedSize == 0) || (Header->UncompressedSize > 0x40000000))
+  {
+    return FALSE;
+  }
+
+  if ((UINT64)sizeof (UNIXNUPK_HEADER) + Header->CompressedSize > Available) {
+    return FALSE;
+  }
+
+  DestinationSize = 0;
+  ScratchSize     = 0;
+  Status = LzmaUefiDecompressGetInfo (
+             (CONST VOID *)(Base + sizeof (UNIXNUPK_HEADER)),
+             Header->CompressedSize,
+             &DestinationSize,
+             &ScratchSize
+             );
+  if (EFI_ERROR (Status) || (DestinationSize == 0) || (DestinationSize > 0x40000000)) {
+    DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: pack info failed %r\n", Status));
+    return FALSE;
+  }
+
+  PaddedSize = ALIGN_VALUE ((UINTN)DestinationSize, RAM_BLOCK_SIZE);
+  Pages      = EFI_SIZE_TO_PAGES (PaddedSize);
+  Destination = 0;
+  Status = gBS->AllocatePages (AllocateAnyPages, EfiBootServicesData, Pages, &Destination);
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: no memory for 0x%x bytes: %r\n", PaddedSize, Status));
+    return FALSE;
+  }
+
+  Scratch = NULL;
+  if (ScratchSize != 0) {
+    Status = gBS->AllocatePool (EfiBootServicesData, ScratchSize, &Scratch);
+    if (EFI_ERROR (Status)) {
+      gBS->FreePages (Destination, Pages);
+      return FALSE;
+    }
+  }
+
+  Status = LzmaUefiDecompress (
+             (CONST VOID *)(Base + sizeof (UNIXNUPK_HEADER)),
+             Header->CompressedSize,
+             (VOID *)(UINTN)Destination,
+             Scratch
+             );
+  if (Scratch != NULL) {
+    gBS->FreePool (Scratch);
+  }
+
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: lzma failed %r\n", Status));
+    gBS->FreePages (Destination, Pages);
+    return FALSE;
+  }
+
+  if (!PublishRange ((UINT64)Destination, (UINT64)Destination + PaddedSize)) {
+    gBS->FreePages (Destination, Pages);
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+STATIC
+BOOLEAN
+LooksLikePayload (
+  IN CONST UINT8  *Boot
+  );
 
 STATIC
 BOOLEAN
@@ -202,6 +347,15 @@ PublishInitrd (
     return FALSE;
   }
 
+  if (PublishPack ((CONST UINT8 *)(UINTN)Start, End - Start)) {
+    return TRUE;
+  }
+
+  if (!LooksLikePayload ((CONST UINT8 *)(UINTN)Start)) {
+    DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: initrd 0x%lx-0x%lx is neither pack nor FAT\n", Start, End));
+    return FALSE;
+  }
+
   if (((End - Start) % RAM_BLOCK_SIZE) != 0) {
     UINT64  Rounded = ((End - Start) + RAM_BLOCK_SIZE - 1) / RAM_BLOCK_SIZE * RAM_BLOCK_SIZE;
     DEBUG ((DEBUG_WARN, "UNIXNURAMDISK: initrd 0x%lx-0x%lx rounded to 0x%lx bytes\n", Start, End, Rounded));
@@ -211,12 +365,6 @@ PublishInitrd (
   return PublishRange (Start, End);
 }
 
-//
-// Some vendor bootloaders hand over a boot image without linux,initrd-start and
-// linux,initrd-end in /chosen: header v4 images carry the ramdisk in a field the
-// bootloader loads but never describes to the payload. Recover the volume by
-// looking for the payload FAT label inside the RAM the memory map reports.
-//
 STATIC
 BOOLEAN
 LooksLikePayload (
@@ -249,51 +397,140 @@ LooksLikePayload (
 
 STATIC
 BOOLEAN
-ScanMemoryForPayload (
-  VOID
+MemoryTypeScannable (
+  IN EFI_MEMORY_TYPE  Type
+  )
+{
+  switch (Type) {
+    case EfiReservedMemoryType:
+    case EfiLoaderCode:
+    case EfiLoaderData:
+    case EfiBootServicesCode:
+    case EfiBootServicesData:
+    case EfiRuntimeServicesCode:
+    case EfiRuntimeServicesData:
+    case EfiConventionalMemory:
+    case EfiACPIReclaimMemory:
+    case EfiACPIMemoryNVS:
+    case EfiPersistentMemory:
+      return TRUE;
+    default:
+      return FALSE;
+  }
+}
+
+STATIC
+EFI_MEMORY_DESCRIPTOR *
+GetScannableMemoryMap (
+  OUT UINTN  *MapSizeOut,
+  OUT UINTN  *DescriptorSizeOut
   )
 {
   EFI_STATUS             Status;
   EFI_MEMORY_DESCRIPTOR  *Map;
-  EFI_MEMORY_DESCRIPTOR  *Entry;
   UINTN                  MapSize;
   UINTN                  MapKey;
   UINTN                  DescriptorSize;
   UINT32                 DescriptorVersion;
   UINTN                  BufferSize;
+
+  MapSize = 0;
+  Status  = gBS->GetMemoryMap (&MapSize, NULL, &MapKey, &DescriptorSize, &DescriptorVersion);
+  if (Status != EFI_BUFFER_TOO_SMALL) {
+    return NULL;
+  }
+
+  BufferSize = MapSize + DescriptorSize * 8;
+  Map        = AllocatePool (BufferSize);
+  if (Map == NULL) {
+    return NULL;
+  }
+
+  Status = gBS->GetMemoryMap (&BufferSize, Map, &MapKey, &DescriptorSize, &DescriptorVersion);
+  if (EFI_ERROR (Status)) {
+    FreePool (Map);
+    return NULL;
+  }
+
+  *MapSizeOut        = BufferSize;
+  *DescriptorSizeOut = DescriptorSize;
+  return Map;
+}
+
+STATIC
+BOOLEAN
+ScanMemoryForPack (
+  VOID
+  )
+{
+  EFI_MEMORY_DESCRIPTOR  *Map;
+  EFI_MEMORY_DESCRIPTOR  *Entry;
+  UINTN                  MapSize;
+  UINTN                  DescriptorSize;
+  UINT64                 RegionStart;
+  UINT64                 RegionEnd;
+  UINT64                 Address;
+
+  Map = GetScannableMemoryMap (&MapSize, &DescriptorSize);
+  if (Map == NULL) {
+    return FALSE;
+  }
+
+  for (Entry = Map;
+       (UINT8 *)Entry < (UINT8 *)Map + MapSize;
+       Entry = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)Entry + DescriptorSize))
+  {
+    if (!MemoryTypeScannable (Entry->Type)) {
+      continue;
+    }
+
+    RegionStart = Entry->PhysicalStart;
+    RegionEnd   = RegionStart + MultU64x64 (Entry->NumberOfPages, EFI_PAGE_SIZE);
+
+    for (Address = RegionStart; Address + sizeof (UNIXNUPK_HEADER) <= RegionEnd; Address += RAM_BLOCK_SIZE) {
+      if (ReadUnaligned64 ((CONST UINT64 *)(UINTN)Address) != UNIXNUPK_MAGIC) {
+        continue;
+      }
+
+      DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: pack at 0x%lx (region 0x%lx-0x%lx)\n", Address, RegionStart, RegionEnd));
+      if (PublishPack ((CONST UINT8 *)(UINTN)Address, RegionEnd - Address)) {
+        FreePool (Map);
+        return TRUE;
+      }
+    }
+  }
+
+  FreePool (Map);
+  DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: pack not found in RAM\n"));
+  return FALSE;
+}
+
+STATIC
+BOOLEAN
+ScanMemoryForPayload (
+  VOID
+  )
+{
+  EFI_MEMORY_DESCRIPTOR  *Map;
+  EFI_MEMORY_DESCRIPTOR  *Entry;
+  UINTN                  MapSize;
+  UINTN                  DescriptorSize;
   UINT64                 RegionStart;
   UINT64                 RegionEnd;
   UINT64                 Address;
   UINT16                 BytesPerSector;
   UINT32                 TotalSectors;
 
-  MapSize = 0;
-  Status  = gBS->GetMemoryMap (&MapSize, NULL, &MapKey, &DescriptorSize, &DescriptorVersion);
-  if (Status != EFI_BUFFER_TOO_SMALL) {
-    return FALSE;
-  }
-
-  BufferSize = MapSize + DescriptorSize * 8;
-  Map        = AllocatePool (BufferSize);
+  Map = GetScannableMemoryMap (&MapSize, &DescriptorSize);
   if (Map == NULL) {
     return FALSE;
   }
 
-  Status = gBS->GetMemoryMap (&BufferSize, Map, &MapKey, &DescriptorSize, &DescriptorVersion);
-  if (EFI_ERROR (Status)) {
-    FreePool (Map);
-    return FALSE;
-  }
-
   for (Entry = Map;
-       (UINT8 *)Entry < (UINT8 *)Map + BufferSize;
+       (UINT8 *)Entry < (UINT8 *)Map + MapSize;
        Entry = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)Entry + DescriptorSize))
   {
-    if ((Entry->Type != EfiConventionalMemory) && (Entry->Type != EfiLoaderData) &&
-        (Entry->Type != EfiBootServicesData) && (Entry->Type != EfiBootServicesCode) &&
-        (Entry->Type != EfiRuntimeServicesData) && (Entry->Type != EfiRuntimeServicesCode) &&
-        (Entry->Type != EfiReservedMemoryType))
-    {
+    if (!MemoryTypeScannable (Entry->Type)) {
       continue;
     }
 
@@ -337,6 +574,10 @@ UniXNURamDiskDxeEntry (
   Hob = GetFirstGuidHob (&mEntryArgHobGuid);
   if (Hob == NULL) {
     DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: no entry argument HOB\n"));
+    if (!ScanMemoryForPack ()) {
+      ScanMemoryForPayload ();
+    }
+
     return EFI_SUCCESS;
   }
 
@@ -347,7 +588,11 @@ UniXNURamDiskDxeEntry (
   Dtb = ReadUnaligned64 ((CONST UINT64 *)GET_GUID_HOB_DATA (Hob));
   if ((Dtb == 0) || ((Dtb & 3) != 0) || (FdtCheckHeader ((VOID *)(UINTN)Dtb) != 0)) {
     DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: x0 0x%lx is not a device tree\n", Dtb));
-    return ScanMemoryForPayload ();
+    if (!ScanMemoryForPack ()) {
+      ScanMemoryForPayload ();
+    }
+
+    return EFI_SUCCESS;
   }
 
   DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: device tree at 0x%lx, %u bytes\n", Dtb, (UINT32)FdtTotalSize ((VOID *)(UINTN)Dtb)));
@@ -356,5 +601,9 @@ UniXNURamDiskDxeEntry (
     return EFI_SUCCESS;
   }
 
-  return ScanMemoryForPayload ();
+  if (!ScanMemoryForPack ()) {
+    ScanMemoryForPayload ();
+  }
+
+  return EFI_SUCCESS;
 }
