@@ -66,7 +66,11 @@ jobs:
 
       - name: tools
         run: |
-          brew install dtc llvm lld cmake mtools ninja glslang shaderc spirv-tools bison pkgconf rustup blacktop/tap/ipsw
+          for attempt in 1 2 3; do
+            brew install dtc llvm lld cmake mtools ninja glslang shaderc spirv-tools bison pkgconf rustup blacktop/tap/ipsw && break
+            echo "brew install failed (attempt $attempt), retrying..."
+            sleep 20
+          done
           {
             echo "$HOME/.cargo/bin"
             echo "/opt/homebrew/opt/llvm/bin"
