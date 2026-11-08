@@ -13,6 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          repository: UniXNU/UniXNU-sheng
           ref: 965460a9ac1715636c769634fd0d69f58b2bd0f9
           path: device
       - name: fetch the official fastboot archive
