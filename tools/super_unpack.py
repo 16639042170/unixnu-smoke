@@ -98,15 +98,22 @@ def parse_metadata(reader):
     if magic != GEOMETRY_MAGIC:
         raise SystemExit(f"bad geometry magic {magic:#x}")
     print(f"geometry: max_size={max_size} slots={slot_count} logical_block={logical_block}", flush=True)
-    for slot in range(slot_count):
-        base = RESERVED + GEOMETRY_SIZE + slot * max_size
+    candidates = [RESERVED + GEOMETRY_SIZE + slot * max_size for slot in range(slot_count)]
+    # fall back to a magic scan when the layout differs from the standard one
+    scan = reader.read_at(0, min(4 << 20, reader.size))
+    hits = [i for i in range(0, len(scan) - 4) if scan[i:i + 4] == struct.pack("<I", HEADER_MAGIC)]
+    print(f"header magic hits: {hits[:8]}", flush=True)
+    for hit in hits:
+        if hit not in candidates:
+            candidates.append(hit)
+    for base in candidates:
         hdr = reader.read_at(base, 256)
         if struct.unpack("<I", hdr[:4])[0] != HEADER_MAGIC:
             continue
         major, minor, header_size, tables_size = struct.unpack("<HHII", hdr[4:16])
         parts = struct.unpack("<III", hdr[80:92])
         exts = struct.unpack("<III", hdr[92:104])
-        print(f"header slot {slot}: v{major}.{minor} header={header_size} tables={tables_size}", flush=True)
+        print(f"header at {base}: v{major}.{minor} header={header_size} tables={tables_size}", flush=True)
         return base, hdr, parts, exts
     raise SystemExit("no valid metadata header")
 
