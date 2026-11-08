@@ -287,7 +287,7 @@ ScanMemoryForPayload (
 
   for (Entry = Map;
        (UINT8 *)Entry < (UINT8 *)Map + BufferSize;
-       Entry = NEXT_MEMORY_DESCRIPTOR (Entry, DescriptorSize))
+       Entry = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)Entry + DescriptorSize))
   {
     if ((Entry->Type != EfiConventionalMemory) && (Entry->Type != EfiLoaderData) &&
         (Entry->Type != EfiBootServicesData) && (Entry->Type != EfiBootServicesCode) &&
