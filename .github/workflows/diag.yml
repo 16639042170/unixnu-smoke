@@ -20,37 +20,42 @@ jobs:
           ref: 965460a9ac1715636c769634fd0d69f58b2bd0f9
           path: device
 
-      - name: fetch the official fastboot archive
-        working-directory: device
+      - name: fetch archive and unpack vendor
         run: |
           set -euo pipefail
+          cd device
           python3 scripts/download-sheng-firmware.py --connections 32
-
-      - name: list every archive member
-        run: |
-          set -euo pipefail
-          ARCHIVE=$(ls device/.cache/firmware/sheng/*.tgz | head -1)
-          tar -tzf "$ARCHIVE" | sed -n '1,120p'
-
-      - name: unpack vendor and inspect the firmware layout
-        run: |
-          set -euo pipefail
+          cd ..
           ARCHIVE=$(ls device/.cache/firmware/sheng/*.tgz | head -1)
           SUPER=$(tar -tzf "$ARCHIVE" | grep -E '/super\.img$' | head -1)
           mkdir -p /tmp/rom
           tar -xzf "$ARCHIVE" -C /tmp/rom "$SUPER"
           python3 tool/tools/super_unpack.py "/tmp/rom/$SUPER" --extract vendor --out /tmp/vendor.img
           sudo apt-get update -qq
-          sudo apt-get install -y -qq erofs-utils
+          sudo apt-get install -y -qq erofs-utils e2fsprogs
+
+      - name: inspect and extract the vendor filesystem
+        run: |
+          set +e
+          echo '--- file type ---'
+          file -s /tmp/vendor.img
+          xxd -l 32 -s 1024 /tmp/vendor.img
+          echo '--- erofs extract ---'
           rm -rf /tmp/vendorout
-          fsck.erofs --extract=/tmp/vendorout /tmp/vendor.img || true
-          echo '--- top level ---'
-          ls /tmp/vendorout | head -30
-          echo '--- vendor/firmware ---'
-          ls -la /tmp/vendorout/vendor/firmware 2>/dev/null | head -40
-          echo '--- any wcn/amss/ath12k ---'
+          fsck.erofs --extract=/tmp/vendorout /tmp/vendor.img 2>&1 | tail -10
+          ls /tmp/vendorout 2>&1 | head -10
+          if [ ! -d /tmp/vendorout/vendor/ ]; then
+            echo '--- ext4 via debugfs ---'
+            debugfs -R "rdump / /tmp/vendorout" /tmp/vendor.img 2>&1 | tail -5
+            ls /tmp/vendorout 2>&1 | head -10
+            if [ ! -d /tmp/vendorout/vendor ]; then
+              echo '--- retry ext4 by uuid path ---'
+              debugfs -R "ls -l /" /tmp/vendor.img 2>&1 | head -20
+            fi
+          fi
+          echo '--- firmware dir ---'
+          ls -la /tmp/vendorout/vendor/firmware 2>&1 | head -40
+          echo '--- wcn/amss/ath12k ---'
           find /tmp/vendorout \( -iname '*wcn*' -o -iname 'amss*' -o -iname '*ath12k*' -o -iname 'board-2.bin' \) 2>/dev/null | head -40
-          echo '--- bt_firmware ---'
-          ls -la /tmp/vendorout/vendor/bt_firmware 2>/dev/null | head -20
-          echo '--- size of firmware dirs ---'
-          du -sh /tmp/vendorout/vendor/firmware /tmp/vendorout/vendor/bt_firmware 2>/dev/null || true
+          echo '--- bt ---'
+          ls -la /tmp/vendorout/vendor/bt_firmware 2>&1 | head -20
