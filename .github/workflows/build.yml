@@ -212,15 +212,17 @@ jobs:
           cp tool/patches/ModuleEntryPoint.S \
              uefi-sheng/Silicon/Silicium/SiliciumPkg/Sec/AArch64/ModuleEntryPoint.S
           cp tool/patches/Sec.c uefi-sheng/Silicon/Silicium/SiliciumPkg/Sec/Sec.c
-          echo "ramdisk driver and x2 handoff patches applied"
+          cp tool/patches/Main.c \
+             UniXNU/package/UniXNUPkg/Library/UniXNULib/Main.c
+          echo "ramdisk driver, x2 handoff and menu diagnostic patches applied"
           python3 - <<'PY'
           import pathlib, sys
           inf = pathlib.Path('UniXNU/package/UniXNUPkg/Driver/UniXNURamDiskDxe/UniXNURamDiskDxe.inf')
           text = inf.read_text()
           if 'MemoryAllocationLib' not in text:
-              text = text.replace('  UefiDriverEntryPoint\n', '  UefiDriverEntryPoint\n  MemoryAllocationLib\n')
+              text = text.replace('  UefiDriverEntryPoint\n', '  UefiDriverEntryPoint\n  MemoryAllocationLib\n  UefiRuntimeServicesTableLib\n')
               inf.write_text(text)
-              print('INF: MemoryAllocationLib added')
+              print('INF: MemoryAllocationLib + UefiRuntimeServicesTableLib added')
 
           dsc = pathlib.Path('UniXNU/package/UniXNUPkg/UniXNUPkg.dsc')
           text = dsc.read_text()
