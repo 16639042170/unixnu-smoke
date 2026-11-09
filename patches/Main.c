@@ -13,7 +13,7 @@
 
 STATIC EFI_SERIAL_IO_PROTOCOL  *mSerial;
 
-STATIC CONST EFI_GUID mDiagGuid = {
+STATIC EFI_GUID mDiagGuid = {
   0x7B3F1A2C, 0x4D5E, 0x6F70, { 0x81, 0x92, 0xA3, 0xB4, 0xC5, 0xD6, 0xE7, 0xF8 }
 };
 
