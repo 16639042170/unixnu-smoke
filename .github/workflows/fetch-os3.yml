@@ -1,0 +1,39 @@
+name: fetch-os3-abl
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download OS3 full ROM and extract bootloader images
+        run: |
+          set -eux
+          URL='https://cdnorg.d.miui.com/OS3.0.305.0.WNXMIXM/sheng_global_images_OS3.0.305.0.WNXMIXM_20260914.0000.00_16.0_global_31450b6677.tgz'
+          curl -L --retry 3 --retry-delay 5 -o rom.tgz "$URL"
+          ls -lh rom.tgz
+          mkdir -p out
+          tar -xzf rom.tgz -C out --wildcards \
+            '*/images/abl.elf' \
+            '*/images/xbl.elf' \
+            '*/images/xbl_config.elf' \
+            '*/images/tz.mbn' \
+            '*/images/hyp.mbn' \
+            '*/images/devcfg.mbn' \
+            '*/images/aop.mbn' \
+            '*/images/qupfw.elf' \
+            '*/images/cmnlib.mbn' \
+            '*/images/cmnlib64.mbn' \
+            '*/images/keymaster.mbn' \
+            '*/images/uefisecapp.mbn' \
+            '*/images/modem.mbn' \
+            '*/images/dsp.mbn' \
+            '*/flash_all.sh' || true
+          find out -type f -printf '%s %p\n' | sort -n
+      - name: Upload bootloader images
+        uses: actions/upload-artifact@v4
+        with:
+          name: os3-bootloader
+          path: out
+          if-no-files-found: error
