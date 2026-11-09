@@ -651,6 +651,24 @@ UniXNURamDiskDxeEntry (
     return EFI_COMPROMISED_DATA;
   }
 
+  //
+  // The patched BootShim passes the physical address of the UNIXNUPK pack in
+  // x2; SEC stores it as the second UINT64 of this HOB.  Try it before any
+  // /chosen or memory-map work: it is the one path that does not depend on the
+  // bootloader handing over a ramdisk.
+  //
+  if (GET_GUID_HOB_DATA_SIZE (Hob) >= (2 * sizeof (UINT64))) {
+    UINT64  PackAddress;
+
+    PackAddress = ReadUnaligned64 ((CONST UINT64 *)((CONST UINT8 *)GET_GUID_HOB_DATA (Hob) + sizeof (UINT64)));
+    if (PackAddress != 0) {
+      DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: pack handoff at 0x%lx\n", PackAddress));
+      if (PublishPack ((CONST UINT8 *)(UINTN)PackAddress, 0x8000000)) {
+        return EFI_SUCCESS;
+      }
+    }
+  }
+
   Dtb = ReadUnaligned64 ((CONST UINT64 *)GET_GUID_HOB_DATA (Hob));
   if ((Dtb == 0) || ((Dtb & 3) != 0) || (FdtCheckHeader ((VOID *)(UINTN)Dtb) != 0)) {
     DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: x0 0x%lx is not a device tree\n", Dtb));
