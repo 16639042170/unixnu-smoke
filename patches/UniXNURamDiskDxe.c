@@ -313,6 +313,13 @@ LooksLikePayload (
 
 STATIC
 BOOLEAN
+RangeInRam (
+  IN UINT64  Start,
+  IN UINT64  Size
+  );
+
+STATIC
+BOOLEAN
 PublishInitrd (
   IN CONST VOID  *Fdt
   )
@@ -344,6 +351,16 @@ PublishInitrd (
   End   = ReadCells (EndProp, EndLength / 4);
   if (End <= Start) {
     DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: empty initrd 0x%lx-0x%lx\n", Start, End));
+    return FALSE;
+  }
+
+  //
+  // /chosen is untrusted input.  Do not touch the bytes until the range is
+  // proven to live in a RAM descriptor; a bogus property on this board points
+  // into MMIO and reading it raises a synchronous external abort.
+  //
+  if (!RangeInRam (Start, End - Start)) {
+    DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: initrd 0x%lx-0x%lx is not RAM\n", Start, End));
     return FALSE;
   }
 
@@ -457,6 +474,49 @@ GetScannableMemoryMap (
   *MapSizeOut        = BufferSize;
   *DescriptorSizeOut = DescriptorSize;
   return Map;
+}
+
+STATIC
+BOOLEAN
+RangeInRam (
+  IN UINT64  Start,
+  IN UINT64  Size
+  )
+{
+  EFI_MEMORY_DESCRIPTOR  *Map;
+  EFI_MEMORY_DESCRIPTOR  *Entry;
+  UINTN                  MapSize;
+  UINTN                  DescriptorSize;
+  UINT64                 RegionStart;
+  UINT64                 RegionEnd;
+  BOOLEAN                Found;
+
+  Map = GetScannableMemoryMap (&MapSize, &DescriptorSize);
+  if (Map == NULL) {
+    return FALSE;
+  }
+
+  Found = FALSE;
+  for (Entry = Map;
+       (UINT8 *)Entry < (UINT8 *)Map + MapSize;
+       Entry = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)Entry + DescriptorSize))
+  {
+    if (!MemoryTypeScannable (Entry->Type) ||
+        ((Entry->Attribute & EFI_MEMORY_UC) != 0))
+    {
+      continue;
+    }
+
+    RegionStart = Entry->PhysicalStart;
+    RegionEnd   = RegionStart + MultU64x64 (Entry->NumberOfPages, EFI_PAGE_SIZE);
+    if ((Start >= RegionStart) && (Start <= RegionEnd) && (Size <= (RegionEnd - Start))) {
+      Found = TRUE;
+      break;
+    }
+  }
+
+  FreePool (Map);
+  return Found;
 }
 
 STATIC
