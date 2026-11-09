@@ -208,7 +208,11 @@ jobs:
           set -euo pipefail
           cp tool/patches/UniXNURamDiskDxe.c \
              UniXNU/package/UniXNUPkg/Driver/UniXNURamDiskDxe/UniXNURamDiskDxe.c
-          echo "ramdisk driver replaced"
+          cp tool/patches/BootShim.S uefi-sheng/BootShim/BootShim.S
+          cp tool/patches/ModuleEntryPoint.S \
+             uefi-sheng/Silicon/Silicium/SiliciumPkg/Sec/AArch64/ModuleEntryPoint.S
+          cp tool/patches/Sec.c uefi-sheng/Silicon/Silicium/SiliciumPkg/Sec/Sec.c
+          echo "ramdisk driver and x2 handoff patches applied"
           python3 - <<'PY'
           import pathlib, sys
           inf = pathlib.Path('UniXNU/package/UniXNUPkg/Driver/UniXNURamDiskDxe/UniXNURamDiskDxe.inf')
