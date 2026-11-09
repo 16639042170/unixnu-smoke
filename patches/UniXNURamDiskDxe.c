@@ -58,7 +58,7 @@ STATIC CONST EFI_GUID mEntryArgHobGuid = {
 // HOB data size, x0 (DT), x2 (pack address), diagnostic status:
 // 0 = no HOB, 1 = pack published, 2 = pack failed, 3 = no pack address,
 // 4 = short HOB, 5 = pack attempt in progress.
-STATIC CONST EFI_GUID mDiagGuid = {
+STATIC EFI_GUID mDiagGuid = {
   0x7B3F1A2C, 0x4D5E, 0x6F70, { 0x81, 0x92, 0xA3, 0xB4, 0xC5, 0xD6, 0xE7, 0xF8 }
 };
 
