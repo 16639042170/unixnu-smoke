@@ -401,8 +401,13 @@ MemoryTypeScannable (
   IN EFI_MEMORY_TYPE  Type
   )
 {
+  //
+  // Only scan descriptor types that the firmware itself describes as RAM.
+  // Reserved/ACPI/persistent ranges can contain MMIO holes on this board;
+  // reading one of those produced a synchronous external abort (FAR
+  // 0xE6710001) during the first full-scan build.
+  //
   switch (Type) {
-    case EfiReservedMemoryType:
     case EfiLoaderCode:
     case EfiLoaderData:
     case EfiBootServicesCode:
@@ -410,9 +415,6 @@ MemoryTypeScannable (
     case EfiRuntimeServicesCode:
     case EfiRuntimeServicesData:
     case EfiConventionalMemory:
-    case EfiACPIReclaimMemory:
-    case EfiACPIMemoryNVS:
-    case EfiPersistentMemory:
       return TRUE;
     default:
       return FALSE;
@@ -480,7 +482,9 @@ ScanMemoryForPack (
        (UINT8 *)Entry < (UINT8 *)Map + MapSize;
        Entry = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)Entry + DescriptorSize))
   {
-    if (!MemoryTypeScannable (Entry->Type)) {
+    if (!MemoryTypeScannable (Entry->Type) ||
+        ((Entry->Attribute & EFI_MEMORY_UC) != 0))
+    {
       continue;
     }
 
@@ -530,7 +534,9 @@ ScanMemoryForPayload (
        (UINT8 *)Entry < (UINT8 *)Map + MapSize;
        Entry = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)Entry + DescriptorSize))
   {
-    if (!MemoryTypeScannable (Entry->Type)) {
+    if (!MemoryTypeScannable (Entry->Type) ||
+        ((Entry->Attribute & EFI_MEMORY_UC) != 0))
+    {
       continue;
     }
 
