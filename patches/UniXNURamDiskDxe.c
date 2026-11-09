@@ -23,6 +23,7 @@
 #include <Library/HobLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/UefiBootServicesTableLib.h>
+#include <Library/UefiRuntimeServicesTableLib.h>
 #include <Protocol/BlockIo.h>
 #include <Protocol/DevicePath.h>
 
@@ -52,6 +53,36 @@ LzmaUefiDecompress (
 STATIC CONST EFI_GUID mEntryArgHobGuid = {
   0xDAEE82E6, 0x8090, 0x4E72, { 0xBF, 0xB9, 0x78, 0xC1, 0x3C, 0xD4, 0xE3, 0x59 }
 };
+
+// Boot-service variable shared with the UniXNU menu app.  Four UINT64:
+// HOB data size, x0 (DT), x2 (pack address), diagnostic status:
+// 0 = no HOB, 1 = pack published, 2 = pack failed, 3 = no pack address,
+// 4 = short HOB, 5 = pack attempt in progress.
+STATIC CONST EFI_GUID mDiagGuid = {
+  0x7B3F1A2C, 0x4D5E, 0x6F70, { 0x81, 0x92, 0xA3, 0xB4, 0xC5, 0xD6, 0xE7, 0xF8 }
+};
+
+STATIC
+VOID
+SetPackDiag (
+  IN UINT64  HobSize,
+  IN UINT64  X0,
+  IN UINT64  X2,
+  IN UINT64  Status
+  )
+{
+  UINT64  Data[4];
+
+  if (gRT == NULL) {
+    return;
+  }
+
+  Data[0] = HobSize;
+  Data[1] = X0;
+  Data[2] = X2;
+  Data[3] = Status;
+  gRT->SetVariable (L"UnixnuPackDiag", &mDiagGuid, EFI_VARIABLE_BOOTSERVICE_ACCESS, sizeof (Data), Data);
+}
 
 // Volume label of the payload FAT image (`[payload] volume` in board.toml).
 STATIC CONST CHAR8  mPayloadLabel[] = { 'S', 'H', 'E', 'N', 'G', 'E', 'S', 'P' };
@@ -636,10 +667,13 @@ UniXNURamDiskDxeEntry (
 {
   EFI_HOB_GUID_TYPE  *Hob;
   UINT64             Dtb;
+  UINT64             HobSize;
+  UINT64             X2;
 
   Hob = GetFirstGuidHob (&mEntryArgHobGuid);
   if (Hob == NULL) {
     DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: no entry argument HOB\n"));
+    SetPackDiag (0, 0, 0, 0);
     if (!ScanMemoryForPack ()) {
       ScanMemoryForPayload ();
     }
@@ -647,7 +681,9 @@ UniXNURamDiskDxeEntry (
     return EFI_SUCCESS;
   }
 
-  if (GET_GUID_HOB_DATA_SIZE (Hob) < sizeof (UINT64)) {
+  HobSize = GET_GUID_HOB_DATA_SIZE (Hob);
+  if (HobSize < sizeof (UINT64)) {
+    SetPackDiag (HobSize, 0, 0, 4);
     return EFI_COMPROMISED_DATA;
   }
 
@@ -657,19 +693,25 @@ UniXNURamDiskDxeEntry (
   // /chosen or memory-map work: it is the one path that does not depend on the
   // bootloader handing over a ramdisk.
   //
-  if (GET_GUID_HOB_DATA_SIZE (Hob) >= (2 * sizeof (UINT64))) {
-    UINT64  PackAddress;
-
-    PackAddress = ReadUnaligned64 ((CONST UINT64 *)((CONST UINT8 *)GET_GUID_HOB_DATA (Hob) + sizeof (UINT64)));
-    if (PackAddress != 0) {
-      DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: pack handoff at 0x%lx\n", PackAddress));
-      if (PublishPack ((CONST UINT8 *)(UINTN)PackAddress, 0x8000000)) {
-        return EFI_SUCCESS;
-      }
-    }
+  Dtb = ReadUnaligned64 ((CONST UINT64 *)GET_GUID_HOB_DATA (Hob));
+  X2  = 0;
+  if (HobSize >= (2 * sizeof (UINT64))) {
+    X2 = ReadUnaligned64 ((CONST UINT64 *)((CONST UINT8 *)GET_GUID_HOB_DATA (Hob) + sizeof (UINT64)));
   }
 
-  Dtb = ReadUnaligned64 ((CONST UINT64 *)GET_GUID_HOB_DATA (Hob));
+  if (X2 != 0) {
+    DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: pack handoff at 0x%lx\n", X2));
+    SetPackDiag (HobSize, Dtb, X2, 5);
+    if (PublishPack ((CONST UINT8 *)(UINTN)X2, 0x8000000)) {
+      SetPackDiag (HobSize, Dtb, X2, 1);
+      return EFI_SUCCESS;
+    }
+
+    SetPackDiag (HobSize, Dtb, X2, 2);
+  } else {
+    SetPackDiag (HobSize, Dtb, 0, 3);
+  }
+
   if ((Dtb == 0) || ((Dtb & 3) != 0) || (FdtCheckHeader ((VOID *)(UINTN)Dtb) != 0)) {
     DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: x0 0x%lx is not a device tree\n", Dtb));
     if (!ScanMemoryForPack ()) {
