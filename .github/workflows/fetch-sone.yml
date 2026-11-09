@@ -1,0 +1,29 @@
+name: fetch-sone-official
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the successful official artifact
+        env:
+          TOKEN: ${{ secrets.SONE_TOKEN }}
+        run: |
+          set -eux
+          curl -L --retry 5 --retry-delay 5 -H "Authorization: Bearer $TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -o images.zip \
+            https://api.github.com/repos/Soneoylys/UniXNU-sheng/actions/artifacts/13664373710/zip
+          ls -lh images.zip
+          unzip -l images.zip | head -30
+          mkdir -p out
+          unzip -j images.zip '*/boot/boot.img' -d out
+          ls -lh out
+      - name: Upload only boot.img
+        uses: actions/upload-artifact@v4
+        with:
+          name: sone-official-boot
+          path: out/boot.img
+          if-no-files-found: error
